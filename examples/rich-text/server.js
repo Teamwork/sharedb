@@ -3,7 +3,7 @@ var express = require('express');
 var ShareDB = require('sharedb');
 var richText = require('rich-text');
 var WebSocket = require('ws');
-var WebSocketJSONStream = require('websocket-json-stream');
+var WebSocketJSONStream = require('@teamwork/websocket-json-stream');
 
 ShareDB.types.register(richText.type);
 var backend = new ShareDB();
@@ -32,7 +32,7 @@ function startServer() {
 
   // Connect any incoming WebSocket connection to ShareDB
   var wss = new WebSocket.Server({server: server});
-  wss.on('connection', function(ws, req) {
+  wss.on('connection', function(ws) {
     var stream = new WebSocketJSONStream(ws);
     backend.listen(stream);
   });

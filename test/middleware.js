@@ -1,11 +1,9 @@
-var async = require('async');
 var Backend = require('../lib/backend');
 var expect = require('expect.js');
 var util = require('./util');
 var types = require('../lib/types');
 
 describe('middleware', function() {
-
   beforeEach(function() {
     this.backend = new Backend();
   });
@@ -22,16 +20,13 @@ describe('middleware', function() {
   }
 
   describe('use', function() {
-
     it('returns itself to allow chaining', function() {
-      var response = this.backend.use('submit', function(request, next) {});
+      var response = this.backend.use('submit', function() {});
       expect(response).equal(this.backend);
     });
-
   });
 
   describe('connect', function() {
-
     it('passes the agent on connect', function(done) {
       var clientId;
       this.backend.use('connect', function(request, next) {
@@ -57,7 +52,6 @@ describe('middleware', function() {
         done();
       });
     });
-
   });
 
   function testReadDoc(expectFidoOnly, expectFidoAndSpot) {
@@ -136,7 +130,6 @@ describe('middleware', function() {
 
       function expectFidoAndSpot(backend, done) {
         var doneAfter = util.callAfter(2, done);
-        var i = 0;
         backend.use('doc', function(request, next) {
           doneAfter();
           if (doneAfter.called === 1) {
@@ -221,6 +214,74 @@ describe('middleware', function() {
     testReadDoc(expectFidoOnly, expectFidoAndSpot);
   });
 
+  describe('reply', function() {
+    beforeEach(function(done) {
+      this.snapshot = {v: 1, type: 'json0', data: {age: 3}};
+      this.backend.db.commit('dogs', 'fido', {v: 0, create: {}}, this.snapshot, null, done);
+    });
+
+    it('context has request and reply objects', function(done) {
+      var snapshot = this.snapshot;
+      this.backend.use('reply', function(replyContext, next) {
+        expect(replyContext).to.have.property('action', 'reply');
+        expect(replyContext.request).to.eql({a: 'qf', id: 1, c: 'dogs', q: {age: 3}});
+        expect(replyContext.reply).to.eql({
+          data: [{v: 1, data: snapshot.data, d: 'fido'}],
+          extra: undefined,
+          a: 'qf',
+          id: 1
+        });
+        expect(replyContext).to.have.property('agent');
+        expect(replyContext).to.have.property('backend');
+        next();
+      });
+
+      var connection = this.backend.connect();
+      connection.createFetchQuery('dogs', {age: 3}, null, function(err, results) {
+        if (err) {
+          return done(err);
+        }
+        expect(results).to.have.length(1);
+        expect(results[0].data).to.eql(snapshot.data);
+        done();
+      });
+    });
+
+    it('can produce errors that get sent back to client', function(done) {
+      var errorMessage = 'This is an error from reply middleware';
+      this.backend.use('reply', function(_replyContext, next) {
+        next(errorMessage);
+      });
+      var connection = this.backend.connect();
+      var doc = connection.get('dogs', 'fido');
+      doc.fetch(function(err) {
+        expect(err).to.have.property('message', errorMessage);
+        done();
+      });
+    });
+
+    it('can make raw additions to query reply extra', function(done) {
+      var snapshot = this.snapshot;
+      this.backend.use('reply', function(replyContext, next) {
+        expect(replyContext.request.a === 'qf');
+        replyContext.reply.extra = replyContext.reply.extra || {};
+        replyContext.reply.extra.replyMiddlewareValue = 'some value';
+        next();
+      });
+
+      var connection = this.backend.connect();
+      connection.createFetchQuery('dogs', {age: 3}, null, function(err, results, extra) {
+        if (err) {
+          return done(err);
+        }
+        expect(results).to.have.length(1);
+        expect(results[0].data).to.eql(snapshot.data);
+        expect(extra).to.eql({replyMiddlewareValue: 'some value'});
+        done();
+      });
+    });
+  });
+
   describe('submit lifecycle', function() {
     // DEPRECATED: 'after submit' is a synonym for 'afterSubmit'
     ['submit', 'apply', 'commit', 'afterSubmit', 'after submit'].forEach(function(action) {
@@ -237,5 +298,4 @@ describe('middleware', function() {
       });
     });
   });
-
 });

@@ -8,6 +8,9 @@
 # Emacs
 \#*\#
 
+# VS Code
+.vscode/
+
 # Logs
 logs
 *.log
@@ -30,4 +33,6 @@ coverage
 
 # Dependency directories
 node_modules
+package-lock.json
+yarn.lock
 jspm_packages

@@ -1,6 +1,6 @@
 {
   "name": "sharedb",
-  "version": "1.0.0-beta.9",
+  "version": "1.0.0-beta.23",
   "description": "JSON OT database backend",
   "main": "lib/index.js",
   "dependencies": {
@@ -13,16 +13,19 @@
   },
   "devDependencies": {
     "coveralls": "^2.11.8",
+    "eslint": "^5.16.0",
+    "eslint-config-google": "^0.13.0",
     "expect.js": "^0.3.1",
     "istanbul": "^0.4.2",
-    "jshint": "^2.9.2",
-    "mocha": "^5.1.1",
-    "sharedb-mingo-memory": "^1.0.0-beta"
+    "lolex": "^3.0.0",
+    "mocha": "^5.2.0",
+    "sinon": "^6.1.5"
   },
   "scripts": {
-    "test": "./node_modules/.bin/mocha && npm run jshint",
+    "test": "./node_modules/.bin/mocha && npm run lint",
     "test-cover": "node_modules/istanbul/lib/cli.js cover node_modules/mocha/bin/_mocha",
-    "jshint": "./node_modules/.bin/jshint lib/*.js test/*.js"
+    "lint": "./node_modules/.bin/eslint --ignore-path .gitignore '**/*.js'",
+    "lint:fix": "npm run lint -- --fix"
   },
   "repository": {
     "type": "git",

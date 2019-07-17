@@ -27,9 +27,25 @@ tracker](https://github.com/share/sharedb/issues).
 - Projections to select desired fields from documents and operations
 - Middleware for implementing access control and custom extensions
 - Ideal for use in browsers or on the server
-- Reconnection of document and query subscriptions
 - Offline change syncing upon reconnection
 - In-memory implementations of database and pub/sub for unit testing
+
+### Reconnection
+
+**TLDR**
+```javascript
+const WebSocket = require('reconnecting-websocket');
+var socket = new WebSocket('ws://' + window.location.host);
+var connection = new sharedb.Connection(socket);
+```
+
+The native Websocket object that you feed to ShareDB's `Connection` constructor **does not** handle reconnections.
+
+The easiest way is to give it a WebSocket object that does reconnect. There are plenty of example on the web. The most important thing is that the custom reconnecting websocket, must have the same API as the native rfc6455 version.
+
+In the "textarea" example we show this off using a Reconnecting Websocket implementation from [reconnecting-websocket](https://github.com/pladaria/reconnecting-websocket).
+
+
 
 ## Example apps
 
@@ -58,9 +74,21 @@ initial data. Then you can submit editing operations on the document (using
 OT). Finally you can delete the document with a delete operation. By
 default, ShareDB stores all operations forever - nothing is truly deleted.
 
-## User presence synchronization
+## User Presence Synchronization
 
-Presence data represents a user and is automatically synchronized between all clients subscribed to the same document. Its format is defined by the document's [OT Type](https://github.com/ottypes/docs), for example it may contain a user ID and a cursor position in a text document. All clients can modify their own presence data and receive a read-only version of other client's data. Presence data is automatically cleared when a client unsubscribes from the document or disconnects. It is also automatically transformed against applied operations, so that it still makes sense in the context of a modified document, for example a cursor position may be automatically advanced when a user types at the beginning of a text document.
+ShareDB supports synchronization of user presence data such as cursor positions and text selections. This feature is opt-in, not enabled by default. To enable this feature, pass a presence implementation as the `presence` option to the ShareDB constructor.
+
+ShareDB includes an implementation of presence called `StatelessPresence`. This provides an implementation of presence that works out of the box, but it has some scalability problems. Each time a client joins a document, this implementation requests current presence information from all other clients, via the server. This approach may be problematic in terms of performance when a large number of users are present on the same document simultaneously. If you don't expect too many simultaneous users per document, `StatelessPresence` should work well. The server does not store any state at all regarding presence (it exists only in clients), hence the name "Stateless Presence".
+
+In `StatelessPresence`, presence data represents a user and is automatically synchronized between all clients subscribed to the same document. Its format is defined by the document's [OT Type](https://github.com/ottypes/docs) (specifically, by [`transformPresence`, `createPresence`, and `comparePresence`](https://github.com/teamwork/ot-docs#optional-properties)). All clients can modify their own presence data and receive a read-only version of other client's data. Presence data is automatically cleared when a client unsubscribes from the document or disconnects. It is also automatically transformed against applied operations, so that it still makes sense in the context of a modified document, for example a cursor position may be automatically advanced when a user types at the beginning of a text document.
+
+To use `StatelessPresence`, pass it into the ShareDB constructor like this:
+
+```js
+var ShareDB = require('sharedb');
+var statelessPresence = require('sharedb/lib/presence/stateless');
+var share = new ShareDB({ presence: statelessPresence })`).
+```
 
 ## Server API
 
@@ -80,6 +108,8 @@ __Options__
 * `options.pubsub` _(instance of `ShareDB.PubSub`)_
   Notify other ShareDB processes when data changes
   through this pub/sub adapter. Defaults to `ShareDB.MemoryPubSub()`.
+* `options.presence` _(implementation of presence classes)_
+  Enable user presence synchronization. The value of `options.presence` option is expected to contain implementations of the classes `DocPresence`, `ConnectionPresence`, `AgentPresence`, and `BackendPresence`. Logic related to presence is encapsulated within these classes, so it is possible develop additional third party presence implementations external to ShareDB.
 
 #### Database Adapters
 * `ShareDB.MemoryDB`, backed by a non-persistent database with no queries
@@ -101,7 +131,7 @@ Community Provided Pub/Sub Adapters
 ### Listening to WebSocket connections
 
 ```js
-var WebSocketJSONStream = require('websocket-json-stream');
+var WebSocketJSONStream = require('@teamwork/websocket-json-stream');
 
 // 'ws' is a websocket server connection, as passed into
 // new (require('ws').Server).on('connection', ...)
@@ -128,7 +158,6 @@ Register a new middleware.
   One of:
   * `'connect'`: A new client connected to the server.
   * `'op'`: An operation was loaded from the database.
-  * `'doc'`: DEPRECATED: A snapshot was loaded from the database. Please use 'readSnapshots'
   * `'readSnapshots'`: Snapshot(s) were loaded from the database for a fetch or subscribe of a query or document
   * `'query'`: A query is about to be sent to the database
   * `'submit'`: An operation is about to be submitted to the database
@@ -139,17 +168,24 @@ Register a new middleware.
   * `'afterSubmit'`: An operation was successfully submitted to
     the database.
   * `'receive'`: Received a message from a client
-* `fn` _(Function(request, callback))_
+  * `'reply'`: About to send a non-error reply to a client message
+* `fn` _(Function(context, callback))_
   Call this function at the time specified by `action`.
-  `request` contains a subset of the following properties, as relevant for the action:
-  * `action`: The action this middleware is handing
-  * `agent`: An object corresponding to the server agent handing this client
-  * `req`: The HTTP request being handled
-  * `collection`: The collection name being handled
-  * `id`: The document id being handled
-  * `snapshots`: The retrieved snapshots for the `readSnapshots` action
-  * `query`: The query object being handled
-  * `op`: The op being handled
+  * `context` will always have the following properties:
+    * `action`: The action this middleware is hanlding
+    * `agent`: A reference to the server agent handling this client
+    * `backend`: A reference to this ShareDB backend instance
+  * `context` can also have additional properties, as relevant for the action:
+    * `collection`: The collection name being handled
+    * `id`: The document id being handled
+    * `op`: The op being handled
+    * `req`: HTTP request being handled, if provided to `share.listen` (for 'connect')
+    * `stream`: The duplex Stream provided to `share.listen` (for 'connect')
+    * `query`: The query object being handled (for 'query')
+    * `snapshots`: Array of retrieved snapshots (for 'readSnapshots')
+    * `data`: Received client message (for 'receive')
+    * `request`: Client message being replied to (for 'reply')
+    * `reply`: Reply to be sent to the client (for 'reply')
 
 ### Projections
 
@@ -171,6 +207,27 @@ share.addProjection('users_limited', 'users', { name:true, profileUrl:true });
 ```
 
 Note that only the [JSON0 OT type](https://github.com/ottypes/json0) is supported for projections.
+
+### Logging
+
+By default, ShareDB logs to `console`. This can be overridden if you wish to silence logs, or to log to your own logging driver or alert service.
+
+Methods can be overridden by passing a [`console`-like object](https://developer.mozilla.org/en-US/docs/Web/API/console) to `logger.setMethods`:
+
+```javascript
+var ShareDB = require('sharedb');
+ShareDB.logger.setMethods({
+  info: () => {},                         // Silence info
+  warn: () => alerts.warn(arguments),     // Forward warnings to alerting service
+  error: () => alerts.critical(arguments) // Remap errors to critical alerts
+});
+```
+
+ShareDB only supports the following logger methods:
+
+  - `info`
+  - `warn`
+  - `error`
 
 ### Shutdown
 
@@ -217,6 +274,48 @@ changes. Returns a [`ShareDB.Query`](#class-sharedbquery) instance.
 * `options.*`
   All other options are passed through to the database adapter.
 
+`connection.fetchSnapshot(collection, id, version, callback): void;`
+Get a read-only snapshot of a document at the requested version.
+
+* `collection` _(String)_
+  Collection name of the snapshot
+* `id` _(String)_
+  ID of the snapshot
+* `version` _(number) [optional]_
+  The version number of the desired snapshot. If `null`, the latest version is fetched.
+* `callback` _(Function)_
+  Called with `(error, snapshot)`, where `snapshot` takes the following form:
+
+  ```javascript
+  {
+    id: string;         // ID of the snapshot
+    v: number;          // version number of the snapshot
+    type: string;       // the OT type of the snapshot, or null if it doesn't exist or is deleted
+    data: any;          // the snapshot
+  }
+  ```
+
+`connection.fetchSnapshotByTimestamp(collection, id, timestamp, callback): void;`
+Get a read-only snapshot of a document at the requested version.
+
+* `collection` _(String)_
+  Collection name of the snapshot
+* `id` _(String)_
+  ID of the snapshot
+* `timestamp` _(number) [optional]_
+  The timestamp of the desired snapshot. The returned snapshot will be the latest snapshot before the provided timestamp. If `null`, the latest version is fetched.
+* `callback` _(Function)_
+  Called with `(error, snapshot)`, where `snapshot` takes the following form:
+
+  ```javascript
+  {
+    id: string;         // ID of the snapshot
+    v: number;          // version number of the snapshot
+    type: string;       // the OT type of the snapshot, or null if it doesn't exist or is deleted
+    data: any;          // the snapshot
+  }
+  ```
+
 ### Class: `ShareDB.Doc`
 
 `doc.type` _(String_)
@@ -229,7 +328,7 @@ Unique document ID
 Document contents. Available after document is fetched or subscribed to.
 
 `doc.presence` _(Object)_
-Each property under `doc.presence` contains presence data shared by a client subscribed to this document. The property name is an empty string for this client's data and connection IDs for other clients' data.
+Each property under `doc.presence` contains presence data shared by a client subscribed to this document. The property name is an empty string for this client's data and connection IDs for other clients' data. The structure of the presence object is defined by the OT type of the document (for example, in [ot-rich-text](https://github.com/Teamwork/ot-rich-text#presence) and [@datavis-tech/json0](https://github.com/datavis-tech/json0#presence)).
 
 `doc.fetch(function(err) {...})`
 Populate the fields on `doc` with a snapshot of the document from the server.
@@ -239,7 +338,7 @@ Populate the fields on `doc` with a snapshot of the document from the server, an
 fire events on subsequent changes.
 
 `doc.ingestSnapshot(snapshot, callback)`
-Ingest snapshot data. This data must include a version, snapshot and type. This method is generally called interally as a result of fetch or subscribe and not directly. However, it may be called directly to pass data that was transferred to the client external to the client's ShareDB connection, such as snapshot data sent along with server rendering of a webpage.
+Ingest snapshot data. The `snapshot` param must include the fields `v` (doc version), `data`, and `type` (OT type). This method is generally called interally as a result of fetch or subscribe and not directly from user code. However, it may still be called directly from user code to pass data that was transferred to the client external to the client's ShareDB connection, such as snapshot data sent along with server rendering of a webpage.
 
 `doc.destroy()`
 Unsubscribe and stop firing events.
@@ -338,6 +437,27 @@ after a sequence of diffs are handled.
 `query.on('extra', function() {...}))`
 (Only fires on subscription queries) `query.extra` changed.
 
+### Logging
+
+By default, ShareDB logs to `console`. This can be overridden if you wish to silence logs, or to log to your own logging driver or alert service.
+
+Methods can be overridden by passing a [`console`-like object](https://developer.mozilla.org/en-US/docs/Web/API/console) to `logger.setMethods`
+
+```javascript
+var ShareDB = require('sharedb/lib/client');
+ShareDB.logger.setMethods({
+  info: () => {},                         // Silence info
+  warn: () => alerts.warn(arguments),     // Forward warnings to alerting service
+  error: () => alerts.critical(arguments) // Remap errors to critical alerts
+});
+```
+
+ShareDB only supports the following logger methods:
+
+  - `info`
+  - `warn`
+  - `error`
+
 
 ## Error codes
 
@@ -376,9 +496,11 @@ Additional fields may be added to the error object for debugging context dependi
 * 4021 - Invalid client id
 * 4022 - Database adapter does not support queries
 * 4023 - Cannot project snapshots of this type
-* 4024 - OT Type does not support presence
-* 4025 - Not subscribed to document
-* 4026 - Presence data superseded
+* 4024 - Invalid version
+* 4025 - Passing options to subscribe has not been implemented
+* 4026 - Not subscribed to document
+* 4027 - Presence data superseded
+* 4028 - OT Type does not support presence
 
 ### 5000 - Internal error
 
@@ -402,3 +524,7 @@ The `41xx` and `51xx` codes are reserved for use by ShareDB DB adapters, and the
 * 5016 - _unsubscribe PubSub method unimplemented
 * 5017 - _publish PubSub method unimplemented
 * 5018 - Required QueryEmitter listener not assigned
+* 5019 - getMilestoneSnapshot MilestoneDB method unimplemented
+* 5020 - saveMilestoneSnapshot MilestoneDB method unimplemented
+* 5021 - getMilestoneSnapshotAtOrBeforeTime MilestoneDB method unimplemented
+* 5022 - getMilestoneSnapshotAtOrAfterTime MilestoneDB method unimplemented

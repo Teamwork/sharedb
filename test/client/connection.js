@@ -3,7 +3,6 @@ var Backend = require('../../lib/backend');
 var Connection = require('../../lib/client/connection');
 
 describe('client connection', function() {
-
   beforeEach(function() {
     this.backend = new Backend();
   });
@@ -42,8 +41,8 @@ describe('client connection', function() {
       request.agent.close();
       next();
     });
-    var connection = this.backend.connect();
-  })
+    this.backend.connect();
+  });
 
   it('emits stopped event on call to agent.close()', function(done) {
     this.backend.use('connect', function(request, next) {
@@ -53,6 +52,27 @@ describe('client connection', function() {
     var connection = this.backend.connect();
     connection.on('stopped', function() {
       done();
+    });
+  });
+
+  it('subscribing to same doc closes old stream and adds new stream to agent', function(done) {
+    var connection = this.backend.connect();
+    var agent = connection.agent;
+    var collection = 'test';
+    var docId = 'abcd-1234';
+    var doc = connection.get(collection, docId);
+    doc.subscribe(function(err) {
+      if (err) return done(err);
+      var originalStream = agent.subscribedDocs[collection][docId];
+      doc.subscribe(function() {
+        if (err) return done(err);
+        expect(originalStream).to.have.property('open', false);
+        var newStream = agent.subscribedDocs[collection][docId];
+        expect(newStream).to.have.property('open', true);
+        expect(newStream).to.not.be(originalStream);
+        connection.close();
+        done();
+      });
     });
   });
 
@@ -80,45 +100,65 @@ describe('client connection', function() {
       });
     });
 
+    it('updates after connection socket stream emits "close"', function(done) {
+      var backend = this.backend;
+      var connection = backend.connect();
+      connection.on('connected', function() {
+        connection.socket.stream.emit('close');
+        expect(backend.agentsCount).equal(0);
+        done();
+      });
+    });
+
+    it('updates correctly after stream emits both "end" and "close"', function(done) {
+      var backend = this.backend;
+      var connection = backend.connect();
+      connection.on('connected', function() {
+        connection.socket.stream.emit('end');
+        connection.socket.stream.emit('close');
+        expect(backend.agentsCount).equal(0);
+        done();
+      });
+    });
+
     it('does not increment when agent connect is rejected', function() {
       var backend = this.backend;
       backend.use('connect', function(request, next) {
         next({message: 'Error'});
       });
       expect(backend.agentsCount).equal(0);
-      var connection = backend.connect();
+      backend.connect();
       expect(backend.agentsCount).equal(0);
     });
   });
 
   describe('state management using setSocket', function() {
-
-    it('initial connection.state is connecting, if socket.readyState is CONNECTING', function () {
-        // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-connecting
-        var socket = {readyState: 0};
-        var connection = new Connection(socket);
-        expect(connection.state).equal('connecting');
+    it('initial connection.state is connecting, if socket.readyState is CONNECTING', function() {
+      // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-connecting
+      var socket = {readyState: 0};
+      var connection = new Connection(socket);
+      expect(connection.state).equal('connecting');
     });
 
-    it('initial connection.state is connecting, if socket.readyState is OPEN', function () {
-        // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-open
-        var socket = {readyState: 1};
-        var connection = new Connection(socket);
-        expect(connection.state).equal('connecting');
+    it('initial connection.state is connecting, if socket.readyState is OPEN', function() {
+      // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-open
+      var socket = {readyState: 1};
+      var connection = new Connection(socket);
+      expect(connection.state).equal('connecting');
     });
 
-    it('initial connection.state is disconnected, if socket.readyState is CLOSING', function () {
-        // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-closing
-        var socket = {readyState: 2};
-        var connection = new Connection(socket);
-        expect(connection.state).equal('disconnected');
+    it('initial connection.state is disconnected, if socket.readyState is CLOSING', function() {
+      // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-closing
+      var socket = {readyState: 2};
+      var connection = new Connection(socket);
+      expect(connection.state).equal('disconnected');
     });
 
-    it('initial connection.state is disconnected, if socket.readyState is CLOSED', function () {
-        // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-closed
-        var socket = {readyState: 3};
-        var connection = new Connection(socket);
-        expect(connection.state).equal('disconnected');
+    it('initial connection.state is disconnected, if socket.readyState is CLOSED', function() {
+      // https://html.spec.whatwg.org/multipage/web-sockets.html#dom-websocket-closed
+      var socket = {readyState: 3};
+      var connection = new Connection(socket);
+      expect(connection.state).equal('disconnected');
     });
 
     it('initial state is connecting', function() {
@@ -156,7 +196,5 @@ describe('client connection', function() {
         done();
       });
     });
-
   });
-
 });
